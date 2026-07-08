@@ -1,0 +1,29 @@
+version: 2
+
+updates:
+  # Updates SHA pins and rewrites the trailing `# vX.Y.Z` comment, so pinning by
+  # SHA costs nothing in maintenance.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  # Native since 2025-03: reads pyproject.toml and updates uv.lock. The `pip`
+  # ecosystem would leave uv.lock untouched and out of sync with the manifest.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-dev:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "deps"
+    cooldown:
+      default-days: 7
