@@ -1,0 +1,148 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ratebucket"
+version = "0.0.1"
+description = "Async resource arbiter for APIs with several simultaneous rate limits."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Damir Gusalov" }]
+keywords = ["rate-limit", "token-bucket", "asyncio", "throttling", "backpressure"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Typing :: Typed",
+]
+# The core arbitrates resources. It needs nothing but the standard library.
+# Adapters pull their own dependencies through extras.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/iraettae/ratebucket"
+Source = "https://github.com/iraettae/ratebucket"
+Issues = "https://github.com/iraettae/ratebucket/issues"
+Changelog = "https://github.com/iraettae/ratebucket/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+# The name-matching heuristic would find src/ratebucket on its own. Saying it out
+# loud decouples the build from the day the distribution name stops equalling the
+# import name.
+packages = ["src/ratebucket"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml"]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.1",
+  "pytest-asyncio>=1.4",
+  "anyio>=4.14",
+  "hypothesis>=6.156",
+  "mypy>=2.2",
+  "ruff>=0.15.20",
+  "pre-commit>=4.6",
+]
+
+# ---------------------------------------------------------------------------
+# ruff: linter and formatter. There is no black, no isort, no flake8.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+# target-version is inferred from project.requires-python.
+
+[tool.ruff.lint]
+select = [
+  "E",     # pycodestyle
+  "F",     # pyflakes
+  "I",     # isort
+  "UP",    # pyupgrade
+  "B",     # bugbear
+  "SIM",   # simplify
+  "ASYNC", # flake8-async: the reason this list exists
+  "RUF",
+  "ANN",   # annotations
+  "TID",
+  "PT",
+  "PTH",
+  "C4",
+  "RET",
+]
+ignore = [
+  "E501", # the formatter owns line length
+]
+# No formatter-conflicting rule is reachable from the select list above with preview
+# off. `ruff format` prints a warning for any rule that actually conflicts with these
+# settings; a warning-free run is the proof. Re-check if COM / ISC / Q / D / W is ever
+# added, or if preview is turned on.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ANN401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ratebucket"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# mypy --strict. CI overrides python_version per matrix leg, otherwise the
+# matrix would run the identical check three times.
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+strict = true
+
+warn_unreachable = true
+warn_unused_configs = true
+enable_error_code = [
+  "redundant-expr",
+  "possibly-undefined",
+  "truthy-bool",
+  "truthy-iterable",
+  "ignore-without-code", # bans a bare `# type: ignore`
+  "unused-awaitable",    # a dropped coroutine, in an async library
+  "explicit-override",
+  "mutable-override",
+  "deprecated",
+  "redundant-self",
+  "unimported-reveal",
+  "exhaustive-match",
+]
+pretty = true
+show_error_code_links = true
+
+# ---------------------------------------------------------------------------
+# pytest. All three asyncio options are set explicitly: the deprecation warning
+# for the unset one is raised from pytest_configure, before pytest arms its
+# warning capture, so `filterwarnings = ["error"]` does not catch it and you are
+# never reminded.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
