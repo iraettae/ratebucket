@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Environments
+.venv/
+venv/
+.env
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# NOTE: bench/results.json and bench/timeline.png are deliberately committed.
+# Every number in the README must be reproducible from this repository, and the
+# reviewer should be able to see the artifact without running anything.
