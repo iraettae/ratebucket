@@ -14,7 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_FROZEN: "1"
+  # Not UV_FROZEN: it is mutually exclusive with `uv sync --locked`, and uv says so
+  # by refusing to start. UV_LOCKED is the one that means "the lockfile is the
+  # truth, fail if it drifted from pyproject" -- and it applies to `uv run` too, so
+  # nothing re-resolves halfway through a job.
+  UV_LOCKED: "1"
   FORCE_COLOR: "1"
 
 jobs:
