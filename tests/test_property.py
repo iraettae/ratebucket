@@ -1,8 +1,15 @@
 """The token bucket's permit bound, as a property over random schedules.
 
-The server enforces a rate limit of RPM requests per minute. The intuitive bucket
-is capacity = RPM refilling at RPM/60 per second, and the intuitive claim is that it
-never grants more than RPM permits in any rolling minute. This asserts that claim.
+A bucket of capacity C refilling at rate R does not hand out at most C permits in a
+window; it hands out at most C + R*W. A full bucket fires C at the start of the
+window and refills R*W more before it ends, so a window that straddles the moment a
+full bucket starts draining sees close to both. With C = RPM and R = RPM/60 that is
+nearly 2*RPM in a rolling minute -- which is why the bucket's capacity has to be set
+below RPM, not equal to it (see ADR 0003).
+
+The invariant here is the real one: permits(W) <= capacity + rate*W, asserted with a
+bare `<=` and no tolerance. It holds because refill is continuous; make it discrete
+and the burst at the window boundary breaks it.
 """
 
 from __future__ import annotations
@@ -65,10 +72,10 @@ async def test_permits_bounded_by_capacity_plus_rate_times_window(
             await clock.advance(d)
         window = 1.0
         got = _max_in_window(grants_ns, round(window * 1e9))
-        # The bucket must not hand out more than its capacity in any window.
-        assert got <= capacity, (
-            f"granted {got} in a {window}s window, capacity {capacity} "
-            f"(rate={rate}, workers={n_workers})"
+        bound = capacity + rate * window
+        assert got <= bound, (
+            f"granted {got} in a {window}s window, bound {bound} "
+            f"(capacity={capacity}, rate={rate}, workers={n_workers})"
         )
     finally:
         await clock.aclose()
