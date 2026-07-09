@@ -38,23 +38,32 @@ def _max_in_window(grants_ns: list[int], window_ns: int) -> int:
 
 
 @given(
-    capacity=st.integers(min_value=1, max_value=60),
+    capacity=st.integers(min_value=1, max_value=20),
     rate=st.floats(
-        min_value=0.05, max_value=50.0, allow_nan=False, allow_infinity=False
+        min_value=0.05, max_value=20.0, allow_nan=False, allow_infinity=False
     ),
-    n_workers=st.integers(min_value=0, max_value=40),
-    deltas=st.lists(
-        st.floats(min_value=0.0, max_value=5.0, allow_nan=False, allow_infinity=False),
-        max_size=12,
+    # A schedule of interleaved events: a float advances time, None spawns a worker.
+    # Workers must arrive across the run, not all at the start, or the bucket can only
+    # be drained once and the boundary burst that continuous refill rules out never
+    # gets a chance to appear.
+    events=st.lists(
+        st.one_of(
+            st.floats(
+                min_value=0.0, max_value=5.0, allow_nan=False, allow_infinity=False
+            ),
+            st.none(),
+        ),
+        min_size=1,
+        max_size=40,
     ),
 )
 @settings(
-    max_examples=200,
+    max_examples=300,
     deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 async def test_permits_bounded_by_capacity_plus_rate_times_window(
-    capacity: int, rate: float, n_workers: int, deltas: list[float]
+    capacity: int, rate: float, events: list[float | None]
 ) -> None:
     clock = VirtualClock()
     bucket = TokenBucket(capacity=float(capacity), refill_per_sec=rate, clock=clock)
@@ -65,17 +74,52 @@ async def test_permits_bounded_by_capacity_plus_rate_times_window(
             await clock.sleep(bucket.time_until(1.0))
         grants_ns.append(clock.now_ns())
 
-    for _ in range(n_workers):
-        _ = clock.spawn(worker())
     try:
-        for d in deltas:
-            await clock.advance(d)
-        window = 1.0
+        for event in events:
+            if event is None:
+                _ = clock.spawn(worker())
+            else:
+                await clock.advance(event)
+        for window in (0.5, 1.0, 2.0):
+            got = _max_in_window(grants_ns, round(window * 1e9))
+            bound = capacity + rate * window
+            assert got <= bound, (
+                f"granted {got} in a {window}s window, bound {bound} "
+                f"(capacity={capacity}, rate={rate})"
+            )
+    finally:
+        await clock.aclose()
+
+
+async def test_continuous_refill_bounds_the_boundary_burst() -> None:
+    # The deterministic proof that continuous refill is load-bearing. A full bucket
+    # is drained the instant before a would-be refill boundary, and a second wave of
+    # callers arrives the instant after. With continuous refill the second wave gets
+    # almost nothing (only rate*dt has accrued), so the window stays within
+    # capacity + rate*W. Replace the refill with a discrete once-a-minute dump and the
+    # second wave collects a whole fresh capacity, and the same window holds ~2*capacity
+    # -- the burst the bound forbids.
+    capacity, rate = 10, 1.0
+    clock = VirtualClock()
+    bucket = TokenBucket(capacity=float(capacity), refill_per_sec=rate, clock=clock)
+    grants_ns: list[int] = []
+
+    async def worker() -> None:
+        while not bucket.try_take(1.0):
+            await clock.sleep(bucket.time_until(1.0))
+        grants_ns.append(clock.now_ns())
+
+    try:
+        await clock.advance(59.9)  # bucket sits full, untouched
+        for _ in range(capacity):  # drain the full bucket just before t=60
+            _ = clock.spawn(worker())
+        await clock.advance(0.1)  # to t=60.0, the boundary
+        for _ in range(capacity):  # a second wave arrives right after
+            _ = clock.spawn(worker())
+        await clock.advance(0.1)
+        window = 0.5
         got = _max_in_window(grants_ns, round(window * 1e9))
         bound = capacity + rate * window
-        assert got <= bound, (
-            f"granted {got} in a {window}s window, bound {bound} "
-            f"(capacity={capacity}, rate={rate}, workers={n_workers})"
-        )
+        assert got <= bound, f"granted {got} in {window}s, bound {bound}"
     finally:
         await clock.aclose()
