@@ -9,7 +9,7 @@ parts worth remembering.
 |---|---|---|
 | 1 | Skeleton, release pipeline, clock and bucket | done |
 | 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | done |
-| 3 | Property tests and the bucket invariant | |
+| 3 | Property tests and the bucket invariant | done |
 | 4 | Gate with epochs, error classifier, RetryPolicy | |
 | 5 | Fake provider on a real socket | |
 | 6 | Adapters: openai_compat and http_fetch | |
@@ -155,3 +155,45 @@ its fix is removed. Demonstrated:
   `test_reservation_released_when_cancelled_in_the_grant_window`,
   `test_backfill_candidate_granted_after_it_refills`,
   `test_backfill_never_delays_the_head`), each red without its fix.
+
+---
+
+## Stage 3: property tests and the bucket invariant
+
+### The invariant, and the naive bound that came before it
+
+The headline property test asserts `permits(W) <= capacity + rate*W` over random
+schedules on the VirtualClock. It did not start there. The first version asserted
+the intuitive claim -- a bucket of capacity RPM never grants more than RPM in a
+rolling minute -- and hypothesis falsified it on the first run, shrinking to
+capacity 1, rate 2/s, a one-second window that grants 2: the token the bucket
+started with plus one refilled inside the window. That naive commit is kept in
+history, with the revert above it explaining the burst, because the reason it is
+wrong is the whole reason a bucket's capacity has to be sized below its limit. ADR
+0003 has the sizing decision.
+
+### Decisions
+
+- **Capacity below RPM (ADR 0003).** A bucket of capacity C and rate R grants up to
+  C + R*W in a window W. With C = RPM and R = RPM/60 a rolling minute holds nearly
+  2*RPM, which a fixed-window server rejects. Default the capacity to RPM/6 (ten
+  seconds of burst) while keeping the rate at the full RPM/60. **Checkpoint: the
+  fraction is the owner's to confirm.**
+
+### What went wrong, and what it caught
+
+- **The property test could not, at first, catch the thing it was meant to prove.**
+  With every worker spawned at the start, the bucket is drained once and the
+  boundary burst that continuous refill rules out never gets a chance to appear, so
+  swapping in a discrete refill left the test green. The schedule was changed to
+  spawn workers interleaved with advances, across the run, and a deterministic test
+  was added that constructs the burst directly -- a full bucket drained the instant
+  before a boundary, a second wave arriving the instant after.
+
+### Proof-tests shown red (with the fix removed)
+
+- The naive commit's `permits <= capacity`: red by construction; hypothesis grants
+  2 against a capacity of 1.
+- `test_continuous_refill_bounds_the_boundary_burst`: replace continuous refill with
+  a discrete once-a-minute dump and the constructed window holds 20 against a bound
+  of 10.5 -- the 2*capacity burst. Green on continuous refill.
