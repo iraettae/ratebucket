@@ -8,7 +8,7 @@ parts worth remembering.
 | # | Stage | Planned |
 |---|---|---|
 | 1 | Skeleton, release pipeline, clock and bucket | done |
-| 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | |
+| 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | done |
 | 3 | Property tests and the bucket invariant | |
 | 4 | Gate with epochs, error classifier, RetryPolicy | |
 | 5 | Fake provider on a real socket | |
@@ -69,3 +69,89 @@ parts worth remembering.
   arrives with its revert commit and the ADR on capacity below RPM. The bound was
   validated here (6000 examples, three Python versions, bare `<=`), but the test
   as an artefact belongs to stage 3.
+
+---
+
+## Stage 2: MultiResourceLimiter -- arbiter, Reservation, cancellation
+
+### Decisions
+
+- **One FIFO arbiter, atomic all-or-nothing grants.** Recorded in ADR 0002. The
+  single arbiter looking only at the head and taking from every bucket or none is
+  what makes the two-limit case deadlock-free by construction.
+- **Conservative backfilling behind a flag** (`backfill=`, default off). Measured
+  on a mixed workload (`make bench-backfill`): +171% requests completed in a 30s
+  window versus strict FIFO, with the heavy requests finishing at the same time
+  either way -- the head is never delayed.
+- **The waiting arbiter is woken through a clock timer, not asyncio.timeout.**
+  asyncio.timeout measures real loop time, and the arbiter runs on the injected
+  clock, so its refill wait is a clock sleep racing a wakeup Event.
+
+### What went wrong, and what it caught
+
+- **The arbiter's helper tasks have to be clock-owned.** The wait races a clock
+  sleep against a wakeup Event; the sleep runs in a spawned task, and the
+  VirtualClock only drains tasks it owns. Routing every task the limiter spawns
+  through the injected `spawn` (the clock's under test) is what lets `advance()`
+  settle the whole grant chain.
+- **`time_until` rounds the wait up by a nanosecond**, so a request that needs a
+  refill is granted at t+1ns, not exactly at t. The first draft of a test advanced
+  by exactly the refill time and read the request as not-yet-granted; the fix was
+  in the test, matching the conservative wake.
+- **The backfilling test scenarios were written backwards at first.** A single
+  bucket where the head needs the full capacity makes *every* take delay the head,
+  so backfilling correctly refuses. The real win is multi-dimensional: a request
+  that needs none of the scarce dimension slips past. The tests were rewritten to
+  the case backfilling actually helps.
+
+### A hard adversarial pass over the arbiter, and six defects it found
+
+After the arbiter passed its own tests, it was attacked from six angles at once --
+lost wakeups, cancellation races, reservation accounting under failure, the
+backfill invariant, FIFO/atomicity, and clock-drain integration -- each with
+runnable repros rather than argument. The core held (no deadlock, no partial take,
+strict FIFO, clean drain), but six real defects surfaced, all now fixed with a test
+each:
+
+1. A negative cost minted quota above capacity. Rejected at validation.
+2. A zero-cost dimension on an overdrafted (negative) bucket wedged the whole
+   queue, because `available() >= 0` is false for a negative bucket. A zero
+   requirement now never gates a grant.
+3. `aclose()` left parked callers awaiting a future the dead arbiter would never
+   resolve. It now cancels every pending waiter.
+4. Backfill could delay the head by one or two nanoseconds -- the safety check used
+   linear reachability while the arbiter's wait rounds up. Both now use the same
+   nanosecond arithmetic, and the head's deadline is tracked monotonically so
+   re-evaluating it across wakes cannot push it later. The invariant is now exact,
+   verified by a property test comparing head grant times with backfill on and off.
+5. A cancellation delivered in the grant window -- after the arbiter took the tokens,
+   before the caller resumed -- leaked the whole reservation, because `__aenter__`
+   raised and `__aexit__` never ran. The enqueue path now gives the grant back on
+   that path. This is the reservation leak that is invisible at ten tasks and fatal
+   at forty thousand.
+6. With backfill on, a candidate that became grantable by refill while the head was
+   still blocked was never granted (a lost wakeup, permanent if the head's wait was
+   infinite). The arbiter now also wakes when the earliest candidate could refill.
+
+Along the way the bucket's reads were made side-effect-free (the level is computed
+from a stored origin rather than accumulated on every read), so reading it at
+several instants between two takes no longer drifts.
+
+### Proof-tests shown red (with the fix removed)
+
+Each of the four brief tests, and each of the six regressions above, goes red when
+its fix is removed. Demonstrated:
+
+- `test_cost_exceeds_capacity_fails_fast`: drop the capacity check -> `DID NOT RAISE`.
+- `test_cancelled_waiter_removed_from_queue`: drop the done-callback -> the request
+  behind a cancelled head is granted at t=10 instead of t=1.
+- `test_reservation_released_on_exception`: drop the release in `__aexit__` -> the
+  bucket stays at 70, not 100.
+- `test_bucket_goes_negative_when_actual_exceeds_reserved`: clamp the overspend ->
+  the bucket reads 10 instead of -10.
+- and the six regression tests (`test_negative_cost_is_rejected`,
+  `test_zero_cost_dimension_never_blocks_a_negative_bucket`,
+  `test_aclose_unblocks_a_pending_waiter`,
+  `test_reservation_released_when_cancelled_in_the_grant_window`,
+  `test_backfill_candidate_granted_after_it_refills`,
+  `test_backfill_never_delays_the_head`), each red without its fix.

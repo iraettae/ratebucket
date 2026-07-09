@@ -36,6 +36,9 @@ secrets: ## Scan the FULL git history, not just the working tree
 
 check: lint typecheck core-purity test ## Everything CI runs
 
+bench-backfill: ## Measure conservative backfilling vs strict FIFO on a mixed workload
+	uv run python bench/backfill_delta.py
+
 bench: ## Fake provider + four engines, same failure scenario. No keys, no money, no internet.
 	@echo "not until stage 7"; exit 1
 
