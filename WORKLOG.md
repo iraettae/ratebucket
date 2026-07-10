@@ -10,7 +10,7 @@ parts worth remembering.
 | 1 | Skeleton, release pipeline, clock and bucket | done |
 | 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | done |
 | 3 | Property tests and the bucket invariant | done |
-| 4 | Gate with epochs, error classifier, RetryPolicy | |
+| 4 | Gate with epochs, error classifier, RetryPolicy | done |
 | 5 | Fake provider on a real socket | |
 | 6 | Adapters: openai_compat and http_fetch | |
 | 7 | Benchmark against third-party engines | |
@@ -197,3 +197,29 @@ wrong is the whole reason a bucket's capacity has to be sized below its limit. A
 - `test_continuous_refill_bounds_the_boundary_burst`: replace continuous refill with
   a discrete once-a-minute dump and the constructed window holds 20 against a bound
   of 10.5 -- the 2*capacity burst. Green on continuous refill.
+
+---
+
+## Stage 4: gate with epochs, error classifier, RetryPolicy
+
+### Decisions
+
+- **A shared Gate for the pool-wide pause; a per-worker RetryPolicy on top (ADR 0004).**
+  A 429 is backpressure the whole pool shares, so it is handled by the gate, not by one
+  worker backing off alone -- which is precisely what tenacity cannot do.
+- **Epochs as a compare-and-swap.** A worker reads the gate's epoch before sending and
+  presents it back with a 429; a 429 carrying a stale epoch is ignored. Fifty concurrent
+  429s produce one pause. The same guard reappears in stage 6 for stale rate-limit
+  headers -- the same "acting on an out-of-date view" problem.
+- **Full jitter, injected Random.** `uniform(0, min(cap, base*2**n))`, because it leaves
+  the least clustering under a synchronised burst. The randomness is injected so the
+  backoff is reproducible.
+- **Read timeouts are not retried by default (checkpoint, decided).** A read timeout may
+  mean the request was executed and billed; retrying risks paying twice. `retry_ambiguous`
+  defaults to False; a caller who sends an Idempotency-Key can opt in. Conservative
+  default for a library that spends the user's money.
+
+### Proof-test shown red (with the fix removed)
+
+- `test_fifty_concurrent_429_produce_single_pause`: drop the stale-epoch check in
+  `Gate.throttle` and the epoch climbs to fifty -- fifty pauses, not one.
