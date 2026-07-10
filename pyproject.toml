@@ -73,6 +73,11 @@ dev = [
 line-length = 88
 src = ["src", "tests"]
 # target-version is inferred from project.requires-python.
+# Vendored third-party code (the openai-cookbook script) is kept verbatim under its own
+# licence; linting or reformatting it would defeat the point of vendoring it.
+# force-exclude makes the exclude hold even when pre-commit hands ruff the file by path.
+extend-exclude = ["bench/vendor"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = [
