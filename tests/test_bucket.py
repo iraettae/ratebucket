@@ -148,3 +148,18 @@ async def test_construction_rejects_bad_parameters(
 ) -> None:
     with pytest.raises(ValueError, match="must be finite"):
         TokenBucket(capacity=capacity, refill_per_sec=rate, clock=VirtualClock())
+
+
+async def test_per_minute_sizes_capacity_below_the_limit() -> None:
+    # ADR 0003: refill at the full per-second rate, but capacity is ten seconds of it,
+    # so rpm/6 rather than a whole minute's worth.
+    bucket = TokenBucket.per_minute(3600, clock=VirtualClock())
+    assert bucket.rate == 60.0  # 3600 / 60
+    assert bucket.capacity == 600.0  # 60/s * 10s == 3600 / 6
+    assert bucket.available() == 600.0
+
+
+async def test_per_minute_burst_seconds_is_tunable() -> None:
+    # A caller who knows the provider uses a rolling window can ask for the full minute.
+    bucket = TokenBucket.per_minute(3600, clock=VirtualClock(), burst_seconds=60.0)
+    assert bucket.capacity == 3600.0

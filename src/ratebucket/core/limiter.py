@@ -89,6 +89,21 @@ class TokenBucket:
         self._level = self._capacity
         self._last_ns = self._read_ns()
 
+    @classmethod
+    def per_minute(
+        cls, rate_per_minute: float, clock: Clock, *, burst_seconds: float = 10.0
+    ) -> TokenBucket:
+        """A bucket for a per-minute limit, sized the way ADR 0003 recommends.
+
+        Refill is the full rate (`rate_per_minute / 60` per second), but capacity is only
+        `burst_seconds` of it -- ten seconds by default, so `capacity = rpm / 6`. Keeping
+        capacity below the whole minute is what stops a fixed-window server from seeing a
+        rolling-minute burst of nearly twice the limit and answering with 429s. Pass a
+        larger `burst_seconds` if you know the provider uses a rolling window.
+        """
+        rate = rate_per_minute / 60.0
+        return cls(rate * burst_seconds, rate, clock)
+
     def _read_ns(self) -> int:
         return round(self._clock.now() * _NANOS_PER_SECOND)
 
