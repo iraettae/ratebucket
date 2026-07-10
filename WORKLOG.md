@@ -11,7 +11,7 @@ parts worth remembering.
 | 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | done |
 | 3 | Property tests and the bucket invariant | done |
 | 4 | Gate with epochs, error classifier, RetryPolicy | done |
-| 5 | Fake provider on a real socket | |
+| 5 | Fake provider on a real socket | done |
 | 6 | Adapters: openai_compat and http_fetch | |
 | 7 | Benchmark against third-party engines | |
 | 8 | README, ADRs, 0.1.0 release | |
@@ -223,3 +223,34 @@ wrong is the whole reason a bucket's capacity has to be sized below its limit. A
 
 - `test_fifty_concurrent_429_produce_single_pause`: drop the stale-epoch check in
   `Gate.throttle` and the epoch climbs to fifty -- fifty pauses, not one.
+
+---
+
+## Stage 5: the fake provider on a real socket
+
+### Decisions
+
+- **A real uvicorn server, not a mock transport.** A mock can fake a 429 or a 500,
+  but it cannot drop a connection halfway through a response body, and that failure --
+  a request that may or may not have been executed -- is the one worth testing. The
+  provider runs under uvicorn on an ephemeral port in a background thread.
+- **Behaviour chosen per request by a header.** `X-Fake-Behavior` selects the exact
+  failure a test wants; with no header the endpoint answers 200 with a usage block and
+  `x-ratelimit-*` headers, and enforces its own per-second limits so a load test gets
+  real 429s.
+
+### The scenarios (this is also the benchmark's failure script)
+
+429 with Retry-After and without; 500; a connection dropped mid-body; a slow response
+(and a client read timeout against it); a 200 with a truncated, unparseable body; and
+a real per-second rate limit that 429s past its quota.
+
+### What went wrong, and what it caught
+
+- **The mid-body drop was the one to worry about, and it worked the first time.** A
+  StreamingResponse whose generator raises after a partial chunk makes uvicorn close
+  the connection without a complete body; httpx sees `RemoteProtocolError: peer closed
+  connection without sending complete message body`, which is exactly the real thing.
+- **`filterwarnings = ["error"]` had to make room for the server's stack.** uvicorn,
+  starlette and websockets emit their own deprecations; those are now ignored by module
+  so they do not fail our tests, while everything else still errors.
