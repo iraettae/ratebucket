@@ -12,3 +12,4 @@ Format: [MADR](https://adr.github.io/madr/), trimmed.
 | [0002](0002-single-fifo-arbiter-and-backfilling.md) | A single FIFO arbiter, and conservative backfilling for its head-of-line cost | Accepted |
 | [0003](0003-bucket-capacity-below-rpm.md) | A bucket's capacity is set below the rate limit, not equal to it | Accepted |
 | [0004](0004-hand-written-retry-and-the-shared-gate.md) | A hand-written retry policy over a shared gate, not tenacity | Accepted |
+| [0005](0005-token-estimation.md) | The default token estimate is a dependency-free heuristic, not a tokenizer | Accepted |

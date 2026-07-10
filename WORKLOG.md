@@ -12,7 +12,7 @@ parts worth remembering.
 | 3 | Property tests and the bucket invariant | done |
 | 4 | Gate with epochs, error classifier, RetryPolicy | done |
 | 5 | Fake provider on a real socket | done |
-| 6 | Adapters: openai_compat and http_fetch | |
+| 6 | Adapters: openai_compat and http_fetch | done |
 | 7 | Benchmark against third-party engines | |
 | 8 | README, ADRs, 0.1.0 release | |
 
@@ -254,3 +254,65 @@ a real per-second rate limit that 429s past its quota.
 - **`filterwarnings = ["error"]` had to make room for the server's stack.** uvicorn,
   starlette and websockets emit their own deprecations; those are now ignored by module
   so they do not fail our tests, while everything else still errors.
+
+---
+
+## Stage 6: the adapters, where the core meets httpx
+
+### Decisions
+
+- **Adapters live outside `core/` and are not imported by the top-level package.** So
+  httpx stays an optional dependency: `import ratebucket` needs nothing new, and only
+  `from ratebucket.adapters.openai_compat import ...` pulls httpx in. The core-purity
+  check still passes because the domain words all live in `adapters/`, never in `core/`.
+- **The core learned one new verb: `observe`.** A provider's own `x-ratelimit-remaining-*`
+  headers are ground truth for a shared quota, so `MultiResourceLimiter.observe` folds
+  them back into the buckets. Two rules make it safe. It only ever *lowers* a bucket:
+  the provider seeing more room than we do is not licence to burst past our own pacing,
+  and a smaller self-imposed capacity must still bind. And it is guarded by an
+  observed-at timestamp per dimension, so a header from an earlier request that arrives
+  late cannot overwrite a fresher one. The docstrings stay domain-neutral ("an outside
+  authority", "an externally reported count") so the word never reaches the core.
+- **`classify_httpx` draws the line the core can't.** A connect failure never reached
+  the server: retryable. A read timeout or a body dropped mid-stream may have been
+  executed and billed: ambiguous, and not retried by default (the stage-4 policy). Only
+  the adapter imports httpx, so only the adapter knows `ConnectError` from `ReadTimeout`.
+- **`http_fetch` is the proof the core owes nothing to LLMs.** Thirty lines, cost
+  `{"requests": 1}`, no token dimension, no usage, no headers to fold. It drives the
+  same arbiter, gate and retry policy as the OpenAI client. If the core had leaked a
+  single assumption about tokens, this file could not exist.
+
+### The ordering bug I wrote and then caught
+
+The first cut applied the `x-ratelimit` headers inside `_send`, during the request.
+But the reservation is committed *after* `execute` returns, and the commit's give-back
+would then land on top of the server's correction and undo it. Worse, an early version
+*set* the bucket to the server's remaining, which erased a deliberately-small local cap
+every time (the server always reports more room than a self-imposed sub-limit). Two
+fixes: `observe` only ever lowers, and the adapter carries the observation out of
+`_send` and applies it *last*, after the commit, so the provider's number is the final
+word. Both are pinned by tests (`..._lower_the_bucket_to_the_servers_remaining`,
+`..._generous_response_headers_do_not_raise_the_bucket`).
+
+### The checkpoint: the default token estimate (ADR 0005)
+
+The adapter must reserve a token cost before it knows one, so it estimates. The default
+is dependency-free `chars / 4.0`; tiktoken is an optional extra behind a `TokenEstimator`
+Protocol. Measured against tiktoken `cl100k_base` (`bench/estimator_error.py`), chars/4
+runs ~16% mean absolute error and under-counts token-dense input -- code, numbers,
+punctuation -- by up to 45%. That sounds alarming and mostly is not: reserve-and-reconcile
+means the estimate only sizes the reservation, and the commit corrects it to the reported
+usage, so a miss costs a little transient fairness, never accuracy. 4.0 stays the default
+over the marginally-tighter 4.2 because it is the recognisable rule of thumb and biases
+slightly high, which is the safe direction for a reservation.
+
+### Proof-tests shown red (with the fix removed)
+
+- `test_stale_ratelimit_headers_ignored`: drop the observed-at guard in
+  `MultiResourceLimiter.observe` and a late, stale header drops the bucket below the
+  fresher value that already stood.
+- `test_a_low_estimate_drives_the_tokens_bucket_negative`: an end-to-end path for the
+  overdraft the bucket is built to record -- the reservation under-guesses, the commit
+  takes the difference, the bucket goes negative instead of clamping and under-counting.
+- `test_a_dropped_connection_surfaces_and_is_not_retried` (real socket): a genuine
+  `RemoteProtocolError` is classified ambiguous and reaches the caller once, not retried.
