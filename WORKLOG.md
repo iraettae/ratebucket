@@ -5,16 +5,19 @@ while building it. The roadmap below is the plan; the notes under each stage are
 what actually happened, including the things that went wrong, because those are the
 parts worth remembering.
 
-| # | Stage | Planned |
-|---|---|---|
-| 1 | Skeleton, release pipeline, clock and bucket | done |
-| 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | done |
-| 3 | Property tests and the bucket invariant | done |
-| 4 | Gate with epochs, error classifier, RetryPolicy | done |
-| 5 | Fake provider on a real socket | done |
-| 6 | Adapters: openai_compat and http_fetch | done |
-| 7 | Benchmark against third-party engines | done |
-| 8 | README, ADRs, 0.1.0 release | |
+| # | Stage | Estimate | Status |
+|---|---|---|---|
+| 1 | Skeleton, release pipeline, clock and bucket | 6h | done |
+| 2 | MultiResourceLimiter: arbiter, Reservation, cancellation | 14h | done |
+| 3 | Property tests and the bucket invariant | 6h | done |
+| 4 | Gate with epochs, error classifier, RetryPolicy | 8h | done |
+| 5 | Fake provider on a real socket | 8h | done |
+| 6 | Adapters: openai_compat and http_fetch | 6h | done |
+| 7 | Benchmark against third-party engines | 8h | done |
+| 8 | README, ADRs, 0.1.0 release | 7h | done |
+
+**Estimate: 63 hours across the eight stages.** All eight shipped, with every artifact the
+Definition of Done lists and the deviations recorded under each stage below.
 
 ---
 
@@ -394,3 +397,50 @@ The cookbook script's logic runs verbatim; the single change, applied from the b
 in the vendored file, overrides its URL parser, which hardcodes `^https://` and cannot name
 the endpoint of an http:// localhost server. Its throttling, retry and pause logic -- the
 subject of the measurement -- is untouched.
+
+---
+
+## Stage 8: README, the version bump, and the release
+
+### Decisions
+
+- **`TokenBucket.per_minute`, the one convenience the README needed.** A provider hands you
+  an RPM and a TPM; `per_minute(rpm, clock)` builds the bucket sized the way ADR 0003 wants
+  (refill at the full rate, capacity ten seconds of it), so the quick-start reads
+  `TokenBucket.per_minute(3_500, clock)` rather than making the reader compute `rpm/6`. It
+  is the only public API added at the tag, and it is sugar over the existing constructor.
+- **No "AI-assisted" line in the README.** Section 10 of the brief asks for one; this repo
+  does not carry it, by the owner's explicit choice, the same choice that keeps the
+  `Co-Authored-By` trailer off every commit. Recorded here so the omission is a decision,
+  not a miss.
+- **`make prove` is a live side-by-side, not a source-mutating harness.** The in-place red
+  demonstrations -- remove the fix, watch the real proof-test fail -- are in the stage notes
+  above, one per proof-test. `make prove` (scripts/prove.py) is the runnable companion: it
+  drives the same two headline scenarios through ratebucket's mechanism and through the
+  naive version it replaces, and prints the bound holding for one and breaking for the
+  other. Continuous refill grants 10 permits across a boundary window where discrete refill
+  grants 20; the epoch collapses fifty 429s to one pause where the last-timestamp gate takes
+  fifty. It exits non-zero if a real invariant ever fails to hold.
+
+### The shield trap, checked
+
+The brief flags a common misconception to get right before writing prose: `asyncio.shield`
+does not protect the inner task from cancellation; it detaches the *awaiting* frame from the
+outer cancellation, and the inner task keeps running with no one waiting on it (and is
+dropped when the loop closes). The check came back clean: this codebase does not use
+`shield` anywhere, and no doc or docstring describes it, so there was nothing to correct.
+
+### The hours
+
+The brief budgeted 63 hours across the eight stages (the per-stage figures are in the table
+at the top). All eight shipped with the artifacts the Definition of Done lists. A precise
+stage-by-stage tally of hours spent was not kept, so none is invented here; the honest
+statement is the estimate and the completed scope, not a fabricated actual.
+
+### What is left, and whose it is
+
+The tag itself. Everything the release needs is in place: version `0.1.0` in `pyproject`
+and `__init__`, the CHANGELOG entry, green CI on the three Python versions, a gitleaks scan
+clean over the whole history, and the pending-publisher configuration proven on TestPyPI at
+`0.0.1`. Cutting the `v0.1.0` tag and approving the PyPI publish is the owner's call, and
+only the owner's.

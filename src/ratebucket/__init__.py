@@ -12,7 +12,7 @@ from ratebucket.core.limiter import (
 )
 from ratebucket.core.retry import Outcome, RetryError, RetryPolicy, classify_status
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 __all__ = [
     "Clock",

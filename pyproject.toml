@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ratebucket"
-version = "0.0.1"
+version = "0.1.0"
 description = "Async resource arbiter for APIs with several simultaneous rate limits."
 readme = "README.md"
 requires-python = ">=3.11"
