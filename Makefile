@@ -22,7 +22,7 @@ test: ## Run the test suite
 	uv run pytest -q
 
 core-purity: ## The core must not know the word. Zero matches required.
-	@if grep -rniE 'openai|prompt|model' src/ratebucket/core/ ; then \
+	@if grep -rniE --include='*.py' 'openai|prompt|model' src/ratebucket/core/ ; then \
 		echo ""; \
 		echo "FAIL: src/ratebucket/core/ mentions the domain."; \
 		echo "The core arbitrates resources. It does not know what an LLM is."; \

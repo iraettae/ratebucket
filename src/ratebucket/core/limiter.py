@@ -135,6 +135,20 @@ class TokenBucket:
         self._level = min(self._capacity, self._level_at(now_ns) + n)
         self._last_ns = now_ns
 
+    def observe(self, level: float) -> None:
+        """Lower the level to an externally reported remaining count, if that count is
+        below the current level -- an outside authority reporting that a shared resource
+        has less left than local accounting believes, so the caller backs off before
+        overrunning it. Never *raises* the level: an outside count seeing more room than
+        we do is not licence to burst past our own pacing, and a smaller self-imposed
+        capacity is meant to bind. Whether the observation is fresh enough to apply at
+        all is the caller's concern (`MultiResourceLimiter.observe`); this takes the
+        minimum.
+        """
+        now_ns = self._read_ns()
+        self._level = min(self._level_at(now_ns), float(level))
+        self._last_ns = now_ns
+
     def time_until(self, n: float) -> float:
         """Seconds until the bucket would hold `n` tokens; 0.0 if it already does.
 
@@ -201,6 +215,7 @@ class MultiResourceLimiter:
         self._backfill = backfill
         self._queue: deque[_Entry] = deque()
         self._wakeup = asyncio.Event()
+        self._last_observed_ns: dict[str, int] = {}
         self._arbiter: asyncio.Task[Any] | None = None
         self._spawn: Callable[[Coroutine[Any, Any, Any]], asyncio.Task[Any]] = (
             asyncio.create_task
@@ -249,6 +264,32 @@ class MultiResourceLimiter:
         """
         self._validate(cost)
         return Reservation(self, dict(cost))
+
+    def observe(self, remaining: Mapping[str, float], *, observed_ns: int) -> None:
+        """Fold externally reported remaining counts back into the buckets. `observed_ns`
+        is when the counts were read -- the instant they describe -- so a count older than
+        the newest already applied to a dimension is dropped: observations can arrive out
+        of order, and one describing a resource as it stood three seconds ago must not
+        overwrite one describing it now. Dimensions with no bucket are ignored rather than
+        raised on, since a caller may report counts for resources this limiter does not
+        arbitrate.
+        """
+        changed = False
+        for dimension, level in remaining.items():
+            bucket = self._buckets.get(dimension)
+            if bucket is None:
+                continue
+            last = self._last_observed_ns.get(dimension)
+            if last is not None and observed_ns <= last:
+                continue  # a fresher observation already stands for this dimension
+            self._last_observed_ns[dimension] = observed_ns
+            bucket.observe(level)
+            changed = True
+        if changed:
+            # A lowered level can only make the head wait longer; wake so the arbiter
+            # recomputes its promised start against the correction rather than firing
+            # early on a level that no longer holds.
+            self._wakeup.set()
 
     # -- validation ---------------------------------------------------------
 
