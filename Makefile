@@ -43,8 +43,8 @@ bench: ## Fake provider + four engines, same 429 scenario. No keys, no money, no
 	uv run --with aiometer --with tenacity --with aiohttp --with tiktoken --with litellm \
 	       --with matplotlib python bench/run.py
 
-prove: ## Show that the proof-tests go red when their fix is removed
-	@echo "not until stage 3"; exit 1
+prove: ## Walk the two headline invariants: the real mechanism vs the naive one it replaces
+	uv run python scripts/prove.py
 
 clean: ## Remove caches and build artifacts
 	rm -rf build dist .mypy_cache .pytest_cache .ruff_cache .hypothesis htmlcov .coverage
