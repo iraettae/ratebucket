@@ -27,6 +27,15 @@ classifiers = [
 # Adapters pull their own dependencies through extras.
 dependencies = []
 
+[project.optional-dependencies]
+# The openai-compatible adapter: an async HTTP client and response validation. The
+# core needs neither; only the adapter and its tests do.
+openai = ["httpx>=0.27", "pydantic>=2.7"]
+# Accurate prompt-token counting. Off by default because tiktoken downloads a BPE
+# file over the network on first use, which would break `make demo`'s no-internet
+# promise; the default estimator is a cheap heuristic.
+tiktoken = ["tiktoken>=0.7"]
+
 [project.urls]
 Homepage = "https://github.com/iraettae/ratebucket"
 Source = "https://github.com/iraettae/ratebucket"
@@ -51,6 +60,10 @@ dev = [
   "mypy>=2.2",
   "ruff>=0.15.20",
   "pre-commit>=4.6",
+  # The fake provider runs on a real socket, so its scenarios (a connection dropped
+  # mid-body, a slow response) are the real thing and not a mock transport.
+  "starlette>=0.40",
+  "uvicorn>=0.30",
 ]
 
 # ---------------------------------------------------------------------------
@@ -139,9 +152,16 @@ show_error_code_links = true
 [tool.pytest.ini_options]
 minversion = "9.0"
 testpaths = ["tests"]
+pythonpath = ["tests"]  # so tests and conftest can import the fake_provider module
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # uvicorn/starlette/websockets emit their own deprecations; do not fail our tests on them.
+  "ignore::DeprecationWarning:uvicorn.*",
+  "ignore::DeprecationWarning:websockets.*",
+  "ignore::DeprecationWarning:starlette.*",
+]
 
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
