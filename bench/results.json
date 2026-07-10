@@ -1,0 +1,60 @@
+{
+  "disclaimer": "Fake provider from this repository (tests/fake_provider.py) on localhost. Not a production provider; wall-clock is dominated by each engine's reaction to the provider's rate-limit 429s, not by network or model latency.",
+  "config": {
+    "n_requests": 150,
+    "provider_rps_limit": 45,
+    "provider_tps_limit": 1000000,
+    "provider_fail_every": 0,
+    "provider_drop_every": 0,
+    "throttle_period_s": 0.0,
+    "throttle_duration_s": 0.0,
+    "declared_rps": 42.0,
+    "declared_tpm": 1000000
+  },
+  "engines": [
+    {
+      "name": "ratebucket",
+      "wall_clock_s": 4.061,
+      "requests_sent": 153,
+      "succeeded": 150,
+      "rate_limited_429": 3,
+      "server_errors_500": 0,
+      "dropped_bodies": 0,
+      "gate_pauses": 3,
+      "note": ""
+    },
+    {
+      "name": "aiometer+tenacity",
+      "wall_clock_s": 3.743,
+      "requests_sent": 150,
+      "succeeded": 150,
+      "rate_limited_429": 0,
+      "server_errors_500": 0,
+      "dropped_bodies": 0,
+      "gate_pauses": 0,
+      "note": ""
+    },
+    {
+      "name": "openai-cookbook",
+      "wall_clock_s": 45.325,
+      "requests_sent": 153,
+      "succeeded": 150,
+      "rate_limited_429": 3,
+      "server_errors_500": 0,
+      "dropped_bodies": 0,
+      "gate_pauses": 0,
+      "note": ""
+    },
+    {
+      "name": "litellm-router",
+      "wall_clock_s": 5.162,
+      "requests_sent": 270,
+      "succeeded": 118,
+      "rate_limited_429": 152,
+      "server_errors_500": 0,
+      "dropped_bodies": 0,
+      "gate_pauses": 0,
+      "note": ""
+    }
+  ]
+}

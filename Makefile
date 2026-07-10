@@ -39,8 +39,9 @@ check: lint typecheck core-purity test ## Everything CI runs
 bench-backfill: ## Measure conservative backfilling vs strict FIFO on a mixed workload
 	uv run python bench/backfill_delta.py
 
-bench: ## Fake provider + four engines, same failure scenario. No keys, no money, no internet.
-	@echo "not until stage 7"; exit 1
+bench: ## Fake provider + four engines, same 429 scenario. No keys, no money, no internet.
+	uv run --with aiometer --with tenacity --with aiohttp --with tiktoken --with litellm \
+	       --with matplotlib python bench/run.py
 
 prove: ## Show that the proof-tests go red when their fix is removed
 	@echo "not until stage 3"; exit 1

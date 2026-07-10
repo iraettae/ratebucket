@@ -27,6 +27,9 @@ htmlcov/
 .vscode/
 .DS_Store
 
+# Benchmark scratch (the cookbook engine's request/result jsonl)
+bench/.bench_tmp/
+
 # NOTE: bench/results.json and bench/timeline.png are deliberately committed.
 # Every number in the README must be reproducible from this repository, and the
 # reviewer should be able to see the artifact without running anything.

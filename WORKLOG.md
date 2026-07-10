@@ -13,7 +13,7 @@ parts worth remembering.
 | 4 | Gate with epochs, error classifier, RetryPolicy | done |
 | 5 | Fake provider on a real socket | done |
 | 6 | Adapters: openai_compat and http_fetch | done |
-| 7 | Benchmark against third-party engines | |
+| 7 | Benchmark against third-party engines | done |
 | 8 | README, ADRs, 0.1.0 release | |
 
 ---
@@ -316,3 +316,81 @@ slightly high, which is the safe direction for a reservation.
   takes the difference, the bucket goes negative instead of clamping and under-counting.
 - `test_a_dropped_connection_surfaces_and_is_not_retried` (real socket): a genuine
   `RemoteProtocolError` is classified ambiguous and reaches the caller once, not retried.
+
+---
+
+## Stage 7: the benchmark against other people's code
+
+### The rule that shaped it
+
+Benchmark only against respected third-party code, never a baseline you wrote yourself:
+a rival you built is a rigged fight and reads as one. So the four engines are the
+openai-cookbook `api_request_parallel_processor.py` (vendored verbatim, its MIT licence
+alongside it), LiteLLM's `Router`, aiometer composed with tenacity, and ratebucket. They
+run the same 150-request workload against the same fake provider from this repository, on
+localhost, with no keys and no network. Heavy engine dependencies come in through
+`uv run --with ...`, so none of them touches uv.lock or CI.
+
+### What the provider measures
+
+One vantage point all four share: the provider logs the arrival time and status of every
+request it serves, and that server-side log is the timeline. The provider enforces a
+per-second request window (45/s); each engine is *told* the limit is 42/s. An engine that
+paces under it flows steadily and earns the occasional boundary 429; an engine that bursts
+a whole allowance earns a storm.
+
+### The result (fake provider, localhost, not production)
+
+    engine              wall-clock   completed   429s   requests sent
+    aiometer+tenacity      3.7s        150/150      0        150
+    ratebucket             4.1s        150/150      3        153
+    litellm-router         5.2s        118/150    152        270
+    openai-cookbook       45.3s        150/150      3        153
+
+(bench/results.json, one committed run; wall-clock and litellm's completion count vary a
+little run to run, the 15-second gaps and the 3-vs-3 429 contrast do not.)
+
+The headline is the two rows that both saw **three** 429s: ratebucket spent 0.3s on them,
+the cookbook script spent forty-one. That is the whole project in one number. The cookbook
+holds a single global pause keyed on `time_of_last_rate_limit_error`, updated on *every*
+429 and read at the top of its main loop; a 429 -- even a stray one from a request already
+in flight -- freezes the entire pool for a hardcoded 15 seconds, and a later 429 drags that
+deadline forward again. Three unavoidable 429s become three 15-second dead gaps on the
+timeline. ratebucket's gate carries an epoch, so a 429 closes the gate only for the wave it
+belongs to and honours the provider's 1-second Retry-After; the same three 429s are three
+short pauses, and the run is over in four seconds. "I found this in OpenAI's own reference
+script, and the epoch in my gate is what fixes it" is the sentence the benchmark exists to
+earn.
+
+### The losses, written plainly (as the rules require)
+
+- **aiometer+tenacity is the fastest here, and ratebucket is 0.3s behind it.** On a
+  single-limit workload that fits inside one `max_per_second`, aiometer paces perfectly and
+  meets no 429s at all, so there is nothing for a pool-wide gate to improve on. ratebucket's
+  0.3s is the three real gate pauses it took to stay polite through its three boundary 429s.
+  What this workload does not exercise is the reason ratebucket exists: two limits at once
+  (requests *and* tokens), reserve-and-reconcile against reported usage, one pause for a
+  whole pool. A faster number on the case that needs none of that is an honest loss, not a
+  hidden one.
+- **litellm-router finished only 118 of 150** (and the exact count wanders run to run --
+  126, 127, 118 -- which is its own tell). The Router is a load balancer built to route
+  around busy *deployments*; pointed at a single one it bursts, storms (152 429s), and even
+  at 20 retries it drops the rest rather than pace the one endpoint it has. Reported as
+  measured; a fuller fleet is where the Router is meant to live.
+
+### An exogenous-throttle variant, and why it is off by default
+
+An earlier cut also had the provider 429 *everything* for 0.35s every 1.5s, a shared quota
+briefly exhausted from outside. It made ratebucket look far worse: honouring a 1-second
+Retry-After against a sub-second block that recurs faster than the pause clears leaves the
+pool paused most of the time. That is a real property (a pool-wide pause over-waits when the
+block is briefer than the Retry-After it is told), but it punishes every pool-wide limiter
+equally and drowns the burst-vs-pace story, so the knob (`throttle_period_s`) ships off. It
+is named in the config, not hidden.
+
+### The one adaptation, disclosed
+
+The cookbook script's logic runs verbatim; the single change, applied from the bench and not
+in the vendored file, overrides its URL parser, which hardcodes `^https://` and cannot name
+the endpoint of an http:// localhost server. Its throttling, retry and pause logic -- the
+subject of the measurement -- is untouched.
