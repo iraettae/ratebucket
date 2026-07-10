@@ -52,11 +52,39 @@ class FakeProvider:
     """Builds the Starlette app. One instance per test keeps the counters isolated."""
 
     def __init__(
-        self, *, rps_limit: int = 1_000_000, tps_limit: int = 1_000_000_000
+        self,
+        *,
+        rps_limit: int = 1_000_000,
+        tps_limit: int = 1_000_000_000,
+        fail_every: int = 0,
+        drop_every: int = 0,
+        throttle_period_s: float = 0.0,
+        throttle_duration_s: float = 0.0,
     ) -> None:
         self._requests = _Window(rps_limit)
         self._tokens = _Window(tps_limit)
         self.seen = 0
+        # Off in the tests (all zero); the benchmark turns them on for a load run that
+        # sees occasional 500s and dropped bodies alongside the rate-limit 429s.
+        self._fail_every = fail_every
+        self._drop_every = drop_every
+        # Exogenous throttling: 429 everything for `throttle_duration_s` on each
+        # `throttle_period_s` cycle, a shared quota briefly exhausted from outside.
+        self._throttle_period_s = throttle_period_s
+        self._throttle_duration_s = throttle_duration_s
+        self._started = time.perf_counter()
+        # (arrival time, status) per request on the load path, for the benchmark
+        # timeline. -1 marks a body dropped mid-stream. Unused by the tests.
+        self.events: list[tuple[float, int]] = []
+
+    def _record(self, status: int) -> None:
+        self.events.append((time.perf_counter(), status))
+
+    def _in_throttle_window(self) -> bool:
+        if self._throttle_period_s <= 0:
+            return False
+        phase = (time.perf_counter() - self._started) % self._throttle_period_s
+        return phase < self._throttle_duration_s
 
     def build(self) -> Starlette:
         return Starlette(
@@ -92,12 +120,35 @@ class FakeProvider:
         # The load-limit path: enforce the provider's own quotas and 429 past them.
         body = await request.json()
         tokens = int(body.get("max_tokens", 16)) + 8
-        if not self._requests.take(1) or not self._tokens.take(tokens):
+
+        # Exogenous throttling: a shared quota briefly exhausted, 429 no client could
+        # have paced around. Checked before the rate window so it 429s even a paced one.
+        if self._in_throttle_window():
+            self._record(429)
             return JSONResponse(
                 {"error": {"message": "rate limit"}},
                 status_code=429,
                 headers={"retry-after": "1"},
             )
+
+        # Deterministic fault injection for the benchmark (both knobs zero in tests).
+        if self._fail_every and self.seen % self._fail_every == 0:
+            self._record(500)
+            return JSONResponse({"error": {"message": "internal"}}, status_code=500)
+        if self._drop_every and self.seen % self._drop_every == 0:
+            self._record(-1)  # the client will see a body dropped mid-stream
+            return StreamingResponse(
+                self._drop_mid_body(), media_type="application/json"
+            )
+
+        if not self._requests.take(1) or not self._tokens.take(tokens):
+            self._record(429)
+            return JSONResponse(
+                {"error": {"message": "rate limit"}},
+                status_code=429,
+                headers={"retry-after": "1"},
+            )
+        self._record(200)
         return JSONResponse(
             _completion(tokens),
             headers={
